@@ -136,7 +136,11 @@ func NewServer(conf *config.Config, logger log.Logger) (*Server, error) {
 		}
 	}
 
-	upstreams := upstream.NewLoadBalancedManager(s.clusterState, tlsConfig)
+	upstreams := upstream.NewLoadBalancedManager(
+		s.clusterState,
+		tlsConfig,
+		upstream.WithSingleSessionPerEndpoint(conf.Upstream.SingleSessionPerEndpoint),
+	)
 	upstreams.Metrics().Register(registry)
 
 	// Proxy server.
