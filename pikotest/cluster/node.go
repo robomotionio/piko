@@ -41,6 +41,8 @@ func NewNode(opts ...Option) *Node {
 	conf.Proxy.Auth = options.authConfig
 	conf.Upstream.Auth = options.authConfig
 	conf.Admin.Auth = options.authConfig
+	conf.Upstream.SingleSessionPerEndpoint = options.singleSessionPerEndpoint
+	conf.Upstream.YamuxKeepAliveSeconds = options.yamuxKeepAliveSeconds
 
 	// If TLS is enabled, generate a certificate and root CA then write to a
 	// file.

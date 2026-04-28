@@ -6,10 +6,12 @@ import (
 )
 
 type options struct {
-	join       []string
-	authConfig auth.Config
-	tls        bool
-	logger     log.Logger
+	join                     []string
+	authConfig               auth.Config
+	tls                      bool
+	logger                   log.Logger
+	singleSessionPerEndpoint bool
+	yamuxKeepAliveSeconds    int
 }
 
 type joinOption struct {
@@ -60,6 +62,30 @@ func (o loggerOption) apply(opts *options) {
 // WithLogger configures the logger. Defaults to no output.
 func WithLogger(logger log.Logger) Option {
 	return loggerOption{Logger: logger}
+}
+
+type singleSessionOption bool
+
+func (o singleSessionOption) apply(opts *options) {
+	opts.singleSessionPerEndpoint = bool(o)
+}
+
+// WithSingleSessionPerEndpoint configures the upstream manager to displace
+// existing sessions for an endpoint when a new one connects.
+func WithSingleSessionPerEndpoint(v bool) Option {
+	return singleSessionOption(v)
+}
+
+type yamuxKeepAliveOption int
+
+func (o yamuxKeepAliveOption) apply(opts *options) {
+	opts.yamuxKeepAliveSeconds = int(o)
+}
+
+// WithYamuxKeepAliveSeconds overrides the upstream yamux KeepAliveInterval
+// (seconds). 0 means use yamux default.
+func WithYamuxKeepAliveSeconds(v int) Option {
+	return yamuxKeepAliveOption(v)
 }
 
 type Option interface {
