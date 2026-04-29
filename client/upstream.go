@@ -68,6 +68,18 @@ type Upstream struct {
 	// Defaults to 15s.
 	MaxReconnectBackoff time.Duration
 
+	// YamuxConfig overrides the default yamux configuration used for the
+	// multiplexed session to the Piko server (optional).
+	//
+	// If nil, [yamux.DefaultConfig] is used. When non-nil, the provided
+	// configuration is shallow-copied and Piko forces its own LogOutput so
+	// internal yamux state is funneled through the [Logger] field.
+	//
+	// Tightening KeepAliveInterval and ConnectionWriteTimeout here is the
+	// recommended way to detect half-open WebSocket tunnels faster than the
+	// default ~30s/10s.
+	YamuxConfig *yamux.Config
+
 	// Logger is an optional logger to log connection state changes.
 	Logger Logger
 }
@@ -134,6 +146,10 @@ func (u *Upstream) connect(ctx context.Context, endpointID string) (*yamux.Sessi
 			)
 
 			muxConfig := yamux.DefaultConfig()
+			if u.YamuxConfig != nil {
+				cp := *u.YamuxConfig
+				muxConfig = &cp
+			}
 			muxConfig.Logger = nil
 			muxConfig.LogOutput = &yamuxLogWriter{logger: u.logger()}
 			sess, err := yamux.Client(conn, muxConfig)

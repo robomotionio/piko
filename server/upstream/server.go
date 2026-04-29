@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/andydunstall/yamux"
 	"github.com/gin-gonic/gin"
@@ -223,6 +224,12 @@ func (s *Server) upstreamRoute(c *gin.Context) {
 	muxConfig := yamux.DefaultConfig()
 	muxConfig.Logger = s.logger.StdLogger(zap.WarnLevel)
 	muxConfig.LogOutput = nil
+	if s.config.YamuxKeepAliveSeconds > 0 {
+		muxConfig.KeepAliveInterval = time.Duration(s.config.YamuxKeepAliveSeconds) * time.Second
+	}
+	if s.config.YamuxConnectionWriteTimeoutSeconds > 0 {
+		muxConfig.ConnectionWriteTimeout = time.Duration(s.config.YamuxConnectionWriteTimeoutSeconds) * time.Second
+	}
 	sess, err := yamux.Server(conn, muxConfig)
 	if err != nil {
 		// Will not happen.
@@ -235,8 +242,20 @@ func (s *Server) upstreamRoute(c *gin.Context) {
 
 	upstream := NewConnUpstream(endpointID, sess)
 
+	// Reactive deregistration: when proxy.Dial sees the remote has GoAway'd
+	// (yamux.ErrRemoteGoAway), the upstream invokes onGone exactly once. We
+	// remove from the load balancer eagerly so subsequent Selects route to a
+	// healthy session instead of bouncing off a draining one.
+	var deregOnce sync.Once
+	deregister := func() {
+		deregOnce.Do(func() {
+			s.upstreams.RemoveConn(upstream)
+		})
+	}
+	upstream.onGone = deregister
+	defer deregister()
+
 	s.upstreams.AddConn(upstream)
-	defer s.upstreams.RemoveConn(upstream)
 
 	for {
 		// The client will never open streams but block on accept to wait for

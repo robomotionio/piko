@@ -78,15 +78,39 @@ type LoadBalancedManager struct {
 	metrics *Metrics
 
 	tlsConfig *tls.Config
+
+	// singleSessionPerEndpoint, if true, makes AddConn displace any existing
+	// upstreams for the endpoint instead of adding alongside them. The
+	// displaced upstreams' sessions are GoAway'd and Closed asynchronously.
+	singleSessionPerEndpoint bool
 }
 
-func NewLoadBalancedManager(cluster *cluster.State, proxyClientTLSConfig *tls.Config) *LoadBalancedManager {
-	return &LoadBalancedManager{
+// LoadBalancedManagerOption configures a LoadBalancedManager.
+type LoadBalancedManagerOption func(*LoadBalancedManager)
+
+// WithSingleSessionPerEndpoint configures the manager to displace existing
+// sessions for an endpoint when a new one is added.
+func WithSingleSessionPerEndpoint(v bool) LoadBalancedManagerOption {
+	return func(m *LoadBalancedManager) {
+		m.singleSessionPerEndpoint = v
+	}
+}
+
+func NewLoadBalancedManager(
+	cluster *cluster.State,
+	proxyClientTLSConfig *tls.Config,
+	opts ...LoadBalancedManagerOption,
+) *LoadBalancedManager {
+	m := &LoadBalancedManager{
 		localUpstreams: make(map[string]*loadBalancer),
 		cluster:        cluster,
 		tlsConfig:      proxyClientTLSConfig,
 		metrics:        NewMetrics(),
 	}
+	for _, o := range opts {
+		o(m)
+	}
+	return m
 }
 
 func (m *LoadBalancedManager) Select(endpointID string, allowRemote bool) (Upstream, bool) {
@@ -114,7 +138,6 @@ func (m *LoadBalancedManager) Select(endpointID string, allowRemote bool) (Upstr
 
 func (m *LoadBalancedManager) AddConn(u Upstream) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	lb, ok := m.localUpstreams[u.EndpointID()]
 	if !ok {
@@ -123,12 +146,46 @@ func (m *LoadBalancedManager) AddConn(u Upstream) {
 		m.metrics.RegisteredEndpoints.Inc()
 	}
 
+	// When configured for single-session-per-endpoint, displace any existing
+	// upstreams for this endpoint. Their sessions are closed asynchronously
+	// (Close blocks waiting for GoAway ACK), but they are removed from the
+	// load balancer synchronously so subsequent Selects route to u.
+	var displaced []Upstream
+	if m.singleSessionPerEndpoint {
+		displaced = append(displaced, lb.upstreams...)
+		lb.upstreams = lb.upstreams[:0]
+		lb.nextIndex = 0
+		// Keep the metric balanced: each displaced upstream counted in
+		// ConnectedUpstreams; we subtract here and rely on the displaced
+		// upstreams' deferred RemoveConn to be a no-op (they are no longer
+		// in the load balancer).
+		for range displaced {
+			m.metrics.ConnectedUpstreams.Dec()
+		}
+	}
+
 	lb.Add(u)
 	m.localUpstreams[u.EndpointID()] = lb
 
 	m.cluster.AddLocalEndpoint(u.EndpointID())
 
 	m.metrics.ConnectedUpstreams.Inc()
+	m.mu.Unlock()
+
+	// Close the displaced sessions outside the lock. Use the optional
+	// SessionCloser interface so the manager doesn't import yamux directly.
+	for _, old := range displaced {
+		if c, ok := old.(SessionCloser); ok {
+			go c.CloseSession()
+		}
+	}
+}
+
+// SessionCloser is implemented by upstreams that wrap a yamux session and can
+// be asked to send GoAway and Close themselves. Used by the manager to
+// displace stale sessions without depending on yamux types.
+type SessionCloser interface {
+	CloseSession()
 }
 
 func (m *LoadBalancedManager) RemoveConn(u Upstream) {

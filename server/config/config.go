@@ -293,6 +293,22 @@ type UpstreamConfig struct {
 	//
 	// Experimental.
 	Tenants []TenantConfig `json:"tenants" yaml:"tenants"`
+
+	// YamuxKeepAliveSeconds overrides the yamux KeepAliveInterval for upstream
+	// sessions. 0 means "use yamux default" (~30s).
+	YamuxKeepAliveSeconds int `json:"yamux_keepalive_seconds" yaml:"yamux_keepalive_seconds"`
+
+	// YamuxConnectionWriteTimeoutSeconds overrides the yamux
+	// ConnectionWriteTimeout for upstream sessions. 0 means "use yamux default"
+	// (~10s).
+	YamuxConnectionWriteTimeoutSeconds int `json:"yamux_connection_write_timeout_seconds" yaml:"yamux_connection_write_timeout_seconds"`
+
+	// SingleSessionPerEndpoint, if true, makes the upstream manager displace
+	// any existing session for an endpoint when a new one connects. The old
+	// session is GoAway'd and closed asynchronously. Deregistration from the
+	// load balancer happens synchronously so subsequent requests route to the
+	// new session immediately.
+	SingleSessionPerEndpoint bool `json:"single_session_per_endpoint" yaml:"single_session_per_endpoint"`
 }
 
 func (c *UpstreamConfig) Validate() error {
@@ -346,6 +362,37 @@ advertise address of '10.26.104.14:8000'.`,
 	c.Rebalance.RegisterFlags(fs, "upstream")
 
 	c.TLS.RegisterFlags(fs, "upstream")
+
+	fs.IntVar(
+		&c.YamuxKeepAliveSeconds,
+		"upstream.yamux-keepalive-seconds",
+		c.YamuxKeepAliveSeconds,
+		`
+Yamux KeepAliveInterval for upstream sessions, in seconds.
+
+If 0, uses yamux default (~30s). Tightening to 5-10s detects half-open
+WebSocket tunnels faster. Should match the client-side setting.`,
+	)
+
+	fs.IntVar(
+		&c.YamuxConnectionWriteTimeoutSeconds,
+		"upstream.yamux-connection-write-timeout-seconds",
+		c.YamuxConnectionWriteTimeoutSeconds,
+		`
+Yamux ConnectionWriteTimeout for upstream sessions, in seconds.
+
+If 0, uses yamux default (~10s). Lowering means stuck writes fail faster.`,
+	)
+
+	fs.BoolVar(
+		&c.SingleSessionPerEndpoint,
+		"upstream.single-session-per-endpoint",
+		c.SingleSessionPerEndpoint,
+		`
+If true, the upstream manager displaces any existing session for an endpoint
+when a new one connects. Disables yamux's multi-session HA semantics and is
+intended for deployments with one upstream per endpoint.`,
+	)
 }
 
 type AdminConfig struct {

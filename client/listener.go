@@ -130,12 +130,23 @@ func (l *listener) EndpointID() string {
 // connect to Piko for the listener endpoint.
 //
 // The endpoint ID and token are included in the initial request.
+//
+// If a previous session was already attached, it is GoAway'd and closed
+// asynchronously so the server can deregister it from its load balancer
+// promptly instead of waiting for keepalive to expire.
 func (l *listener) connect(ctx context.Context) error {
 	sess, err := l.upstream.connect(ctx, l.endpointID)
 	if err != nil {
 		return err
 	}
+	oldSess := l.sess
 	l.sess = sess
+	if oldSess != nil {
+		go func() {
+			_ = oldSess.GoAway()
+			_ = oldSess.Close()
+		}()
+	}
 	return nil
 }
 
